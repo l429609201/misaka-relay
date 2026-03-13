@@ -14,7 +14,7 @@
 
 [本地弹幕库]
   → wstunnel client 连接 VPS :52000
-  → 反向隧道: VPS:9001 → 本地:9000
+  → 反向隧道: VPS:9001 → 本地:7768
 ```
 
 ## VPS 端部署
@@ -84,42 +84,6 @@ docker run -d \
 ```
 
 ---
-
-## 本地端连接
-
-在本地安装 wstunnel 后，运行以下命令建立反向隧道：
-
-```bash
-wstunnel client \
-  -R 'tcp://[::]:9001:localhost:9000' \
-  --http-upgrade-path-prefix "wstunnel/YOUR_WEBHOOK_KEY" \
-  ws://your-vps-ip:52000
-```
-
-**参数说明：**
-- `tcp://[::]:9001` - VPS 上监听的反向隧道端口（对应 `TUNNEL_PORT`）
-- `localhost:9000` - 本地弹幕库的端口
-- `wstunnel/YOUR_WEBHOOK_KEY` - 认证路径，**必须与 `WEBHOOK_KEY` 一致**
-- `ws://your-vps-ip:52000` - VPS 地址（统一使用 52000 端口）
-
----
-
-## 弹幕库配置
-
-所有配置统一使用 VPS 的 **52000 端口**：
-
-**企业微信渠道：**
-- `wecom_proxy`（出站代理）：`http://your-vps-ip:52000`
-- `server_url`（回调地址）：`http://your-vps-ip:52000`
-
-**Telegram 渠道：**
-- `webhook_base_url`：`http://your-vps-ip:52000`
-
-**Emby / Sonarr Webhook：**
-- Webhook URL：`http://your-vps-ip:52000/api/webhook/emby?api_key=YOUR_KEY`
-
----
-
 ## 环境变量
 
 | 变量 | 必填 | 默认值 | 说明 |
@@ -131,8 +95,5 @@ wstunnel client \
 
 ## 注意事项
 
-- VPS 防火墙需开放 **52000 端口**
-- 所有外部请求统一使用 52000 端口访问
-- 如 52000 端口被占用，可修改 `docker-compose.yml` 或 `docker run` 命令中的端口映射
-- `WEBHOOK_KEY` 不要包含 `/` 等特殊字符
+外部请求通过 VPS 的 **52000 端口**，经 Docker 映射到容器内部 **80 端口**，再通过 wstunnel 反向隧道转发至本地弹幕库的 **7768 端口**。
 

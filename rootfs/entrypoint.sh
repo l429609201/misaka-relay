@@ -8,27 +8,24 @@ if [ -z "$WEBHOOK_KEY" ]; then
 fi
 
 echo "============================================"
-echo "  Misaka Danmu VPS Relay"
+echo "  Misaka Relay"
 echo "============================================"
 echo "  隧道端口: ${TUNNEL_PORT:-9001}"
 echo "  认证密钥: ${WEBHOOK_KEY:0:4}****"
 echo "============================================"
 
-# 启动 wstunnel 服务端（后台）
-echo "[INFO] 启动 wstunnel server ..."
-wstunnel server \
-    --restrict-http-upgrade-path-prefix "wstunnel/${WEBHOOK_KEY}" \
-    ws://127.0.0.1:8443 &
+# 启动 relay.py（后台）
+echo "[INFO] 启动 relay.py ..."
+TUNNEL_PORT="${TUNNEL_PORT:-9001}" python3 /relay.py &
+RELAY_PID=$!
 
-WSTUNNEL_PID=$!
-
-# 等待 wstunnel 就绪
+# 等待 relay 就绪
 sleep 1
-if ! kill -0 $WSTUNNEL_PID 2>/dev/null; then
-    echo "[ERROR] wstunnel 启动失败"
+if ! kill -0 $RELAY_PID 2>/dev/null; then
+    echo "[ERROR] relay.py 启动失败"
     exit 1
 fi
-echo "[INFO] wstunnel server 已就绪 (PID: $WSTUNNEL_PID)"
+echo "[INFO] relay.py 已就绪 (PID: $RELAY_PID)"
 
 # 用 envsubst 替换 nginx 配置中的环境变量
 export TUNNEL_PORT="${TUNNEL_PORT:-9001}"
@@ -39,4 +36,5 @@ fi
 # 启动 nginx（前台）
 echo "[INFO] 启动 nginx ..."
 exec nginx -g "daemon off;"
+
 

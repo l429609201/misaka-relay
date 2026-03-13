@@ -25,12 +25,44 @@
 # 1. 上传项目文件到 VPS
 scp -r . user@your-vps:/opt/misaka-relay/
 
-# 2. 修改 docker-compose.yml 中的环境变量
+# 2. 进入项目目录
 cd /opt/misaka-relay
-nano docker-compose.yml  # 修改 WEBHOOK_KEY
 
-# 3. 启动服务
+# 3. 修改 docker-compose.yml 配置
+nano docker-compose.yml
+```
+
+**docker-compose.yml 配置说明：**
+
+```yaml
+services:
+  misaka-relay:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: misaka-relay:latest
+    container_name: misaka-relay
+    restart: unless-stopped
+    ports:
+      - "52000:80"  # 外部端口:容器端口（可修改 52000 为其他端口）
+    environment:
+      # 必填：与弹幕库 Webhook API Key 保持一致
+      - WEBHOOK_KEY=your_webhook_api_key_here
+      # 时区设置
+      - TZ=Asia/Shanghai
+```
+
+**启动服务：**
+
+```bash
+# 构建并启动容器
 docker compose up -d --build
+
+# 查看运行状态
+docker compose ps
+
+# 查看日志
+docker compose logs -f
 ```
 
 ### 方式二：Docker Run
@@ -38,8 +70,9 @@ docker compose up -d --build
 ```bash
 # 构建镜像
 docker build -t misaka-relay:latest .
-
+```
 # 运行容器
+```
 docker run -d \
   --name misaka-relay \
   --restart unless-stopped \

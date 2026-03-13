@@ -3,15 +3,17 @@
 misaka-relay — VPS 端 WebSocket 反向隧道中继服务
 
 架构：
-  [nginx :80] --/ws/--> [relay.py :8443] <-- WebSocket -- [弹幕库 wstunnel client]
-  [nginx :80] --/api/notification/--> [relay.py TCP :9001] --> 隧道 --> [弹幕库 :7768]
+  [nginx :80] --/ws/--> [relay.py :8443] <-- WebSocket -- [弹幕库 tunnel_service]
+  [nginx :80] --/api/notification/--> [relay.py HTTP :9001] --> 隧道 --> [弹幕库 :7768]
 
-协议：
+协议（HTTP over WebSocket）：
   1. 弹幕库建立控制 WS:  ws://VPS/ws/ctrl/{key}
-  2. TCP 连接到 9001 时，relay 通过控制 WS 发送:
-       {"type": "new_conn", "id": "<uuid>"}
+  2. 回调 HTTP 请求到达 relay :9001 时，relay 通过控制 WS 发送完整请求信息:
+       {"type":"new_conn","id":"<uuid>","method":"GET","path":"/api/...","headers":{...},"body":"<hex>"}
   3. 弹幕库新建数据 WS:  ws://VPS/ws/data/{key}/{id}
-  4. relay 将 TCP 连接 ↔ 数据 WS 双向桥接
+  4. 弹幕库把完整 HTTP 响应通过数据 WS 发回:
+       {"status":200,"headers":{...},"body":"<hex>"}
+  5. relay 还原为 HTTP 响应返回给 nginx
 """
 import asyncio
 import hmac
@@ -31,10 +33,10 @@ logging.basicConfig(
 log = logging.getLogger("relay")
 
 WEBHOOK_KEY: str = os.environ.get("WEBHOOK_KEY", "")
-RELAY_TCP_PORT: int = int(os.environ.get("TUNNEL_PORT", "9001"))
+RELAY_HTTP_PORT: int = int(os.environ.get("TUNNEL_PORT", "9001"))
 WS_PORT: int = 8443
 
-# 控制连接：key -> WebSocket（同一时间只有一个弹幕库连接）
+# 控制连接（同一时间只有一个弹幕库连接）
 _ctrl_ws: Optional[web.WebSocketResponse] = None
 
 # 等待数据连接：conn_id -> asyncio.Future[web.WebSocketResponse]
@@ -45,16 +47,15 @@ def _check_key(key: str) -> bool:
     if not WEBHOOK_KEY:
         log.warning("WEBHOOK_KEY 未配置，拒绝所有连接")
         return False
-    # 使用常量时间比较，防止时序攻击（Timing Attack）
     return hmac.compare_digest(key, WEBHOOK_KEY)
 
 
 # ──────────────────────────────────────────────────────────────
-# WebSocket 路由处理
+# WebSocket 路由（弹幕库侧，:8443 via nginx /ws/）
 # ──────────────────────────────────────────────────────────────
 
 async def handle_ctrl(request: web.Request) -> web.WebSocketResponse:
-    """弹幕库控制连接：接受一个持久 WebSocket，用于通知新连接"""
+    """弹幕库控制连接：持久 WebSocket，用于通知新回调请求"""
     global _ctrl_ws
     key = request.match_info["key"]
     if not _check_key(key):
@@ -72,7 +73,6 @@ async def handle_ctrl(request: web.Request) -> web.WebSocketResponse:
         async for msg in ws:
             if msg.type == WSMsgType.ERROR:
                 break
-            # 控制连接只接收方向不需要处理数据（弹幕库只监听）
     finally:
         if _ctrl_ws is ws:
             _ctrl_ws = None
@@ -82,7 +82,7 @@ async def handle_ctrl(request: web.Request) -> web.WebSocketResponse:
 
 
 async def handle_data(request: web.Request) -> web.WebSocketResponse:
-    """弹幕库数据连接：每个 TCP 连接一个 WebSocket"""
+    """弹幕库数据连接：每个回调请求对应一个短暂 WebSocket"""
     key = request.match_info["key"]
     conn_id = request.match_info["conn_id"]
     if not _check_key(key):
@@ -93,14 +93,14 @@ async def handle_data(request: web.Request) -> web.WebSocketResponse:
 
     fut = _pending_data.get(conn_id)
     if fut is None or fut.done():
-        log.warning("收到未知 conn_id 的数据连接: %s", conn_id)
+        log.warning("收到未知 conn_id 的数据连接: %s", conn_id[:8])
         await ws.close()
         return ws
 
     fut.set_result(ws)
-    log.debug("数据连接就绪: %s", conn_id)
+    log.debug("数据连接就绪: %s", conn_id[:8])
 
-    # 保持连接直到对端关闭（由 _bridge_tcp_ws 负责关闭）
+    # 保持连接直到 handle_callback 关闭
     async for msg in ws:
         if msg.type == WSMsgType.ERROR:
             break
@@ -109,86 +109,83 @@ async def handle_data(request: web.Request) -> web.WebSocketResponse:
 
 
 # ──────────────────────────────────────────────────────────────
-# TCP 服务器（接收 nginx 转发来的回调请求）
+# HTTP 服务（接收 nginx proxy_pass 转发的回调，:9001）
 # ──────────────────────────────────────────────────────────────
 
-async def _bridge_tcp_ws(
-    reader: asyncio.StreamReader,
-    writer: asyncio.StreamWriter,
-    ws: web.WebSocketResponse,
-) -> None:
-    """双向桥接：TCP ↔ WebSocket"""
-
-    async def tcp_to_ws():
-        try:
-            while not reader.at_eof():
-                chunk = await reader.read(65536)
-                if not chunk:
-                    break
-                await ws.send_bytes(chunk)
-        except Exception:
-            pass
-        finally:
-            await ws.close()
-
-    async def ws_to_tcp():
-        try:
-            async for msg in ws:
-                if msg.type == WSMsgType.BINARY:
-                    writer.write(msg.data)
-                    await writer.drain()
-                elif msg.type in (WSMsgType.CLOSE, WSMsgType.ERROR):
-                    break
-        except Exception:
-            pass
-        finally:
-            try:
-                writer.close()
-                await writer.wait_closed()
-            except Exception:
-                pass
-
-    await asyncio.gather(tcp_to_ws(), ws_to_tcp(), return_exceptions=True)
-
-
-async def handle_tcp(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-    """处理 nginx 转发来的 TCP 连接"""
+async def handle_callback(request: web.Request) -> web.Response:
+    """
+    接收 nginx 转发的回调 HTTP 请求，序列化后通过控制 WS 发给弹幕库，
+    弹幕库处理完成后通过数据 WS 返回响应，relay 还原为 HTTP 响应。
+    """
     global _ctrl_ws
 
-    peer = writer.get_extra_info("peername")
-    log.info("TCP 连接: %s", peer)
-
     if _ctrl_ws is None or _ctrl_ws.closed:
-        log.warning("无控制连接，拒绝 TCP 请求 (弹幕库未连接)")
-        writer.close()
-        return
+        log.warning("无控制连接（弹幕库未连接），返回 503")
+        return web.Response(status=503, text="Tunnel not connected")
 
+    body = await request.read()
     conn_id = str(uuid.uuid4())
+
+    req_info = {
+        "type": "new_conn",
+        "id": conn_id,
+        "method": request.method,
+        "path": request.path_qs,
+        "headers": dict(request.headers),
+        "body": body.hex(),
+    }
+
     loop = asyncio.get_event_loop()
     fut: asyncio.Future = loop.create_future()
     _pending_data[conn_id] = fut
 
+    log.info("[%s] 回调 %s %s", conn_id[:8], request.method, request.path_qs)
+
     try:
-        # 通知弹幕库建立数据连接
-        await _ctrl_ws.send_json({"type": "new_conn", "id": conn_id})
+        await _ctrl_ws.send_json(req_info)
+        log.info("[%s] 已通知弹幕库", conn_id[:8])
 
-        # 等待弹幕库建立数据 WebSocket（最多 10 秒）
+        # 等待弹幕库建立数据 WS
         try:
-            data_ws = await asyncio.wait_for(fut, timeout=10.0)
+            data_ws = await asyncio.wait_for(fut, timeout=15.0)
         except asyncio.TimeoutError:
-            log.warning("等待数据连接超时: %s", conn_id)
-            writer.close()
-            return
+            log.warning("[%s] 等待数据连接超时，返回 504", conn_id[:8])
+            return web.Response(status=504, text="Tunnel timeout")
 
-        log.info("开始桥接 TCP ↔ WS: %s", conn_id)
-        await _bridge_tcp_ws(reader, writer, data_ws)
-        log.debug("桥接结束: %s", conn_id)
+        # 从数据 WS 接收弹幕库的 HTTP 响应（JSON TEXT 格式）
+        try:
+            msg = await asyncio.wait_for(data_ws.receive(), timeout=30.0)
+        except asyncio.TimeoutError:
+            log.warning("[%s] 等待响应超时，返回 504", conn_id[:8])
+            return web.Response(status=504, text="Response timeout")
+
+        if msg.type != WSMsgType.TEXT:
+            log.warning("[%s] 收到非预期消息类型: %s", conn_id[:8], msg.type)
+            return web.Response(status=502, text="Bad tunnel response")
+
+        resp_info = json.loads(msg.data)
+        status = resp_info.get("status", 200)
+        resp_headers = resp_info.get("headers", {})
+        resp_body = bytes.fromhex(resp_info.get("body", ""))
+
+        # 过滤 hop-by-hop headers，避免 aiohttp 报错
+        skip = {"transfer-encoding", "connection", "keep-alive", "content-encoding",
+                "content-length", "server", "date"}
+        clean_headers = {k: v for k, v in resp_headers.items() if k.lower() not in skip}
+
+        log.info("[%s] 完成，状态 %d，响应 %d B", conn_id[:8], status, len(resp_body))
+        return web.Response(status=status, headers=clean_headers, body=resp_body)
 
     except Exception as e:
-        log.error("TCP 处理异常: %s", e)
-        writer.close()
+        log.error("[%s] 处理异常: %s", conn_id[:8], e)
+        return web.Response(status=502, text="Tunnel error")
     finally:
         _pending_data.pop(conn_id, None)
+        if not fut.cancelled() and fut.done():
+            try:
+                await fut.result().close()
+            except Exception:
+                pass
 
 
 # ──────────────────────────────────────────────────────────────
@@ -200,24 +197,26 @@ async def main() -> None:
         log.error("WEBHOOK_KEY 环境变量未设置，退出")
         raise SystemExit(1)
 
-    # 启动 aiohttp WebSocket 服务
-    app = web.Application()
-    app.router.add_get("/ws/ctrl/{key}", handle_ctrl)
-    app.router.add_get("/ws/data/{key}/{conn_id}", handle_data)
-
-    runner = web.AppRunner(app)
-    await runner.setup()
-    ws_site = web.TCPSite(runner, "127.0.0.1", WS_PORT)
-    await ws_site.start()
+    # WS 服务（弹幕库侧）监听 :8443
+    ws_app = web.Application()
+    ws_app.router.add_get("/ws/ctrl/{key}", handle_ctrl)
+    ws_app.router.add_get("/ws/data/{key}/{conn_id}", handle_data)
+    ws_runner = web.AppRunner(ws_app)
+    await ws_runner.setup()
+    await web.TCPSite(ws_runner, "127.0.0.1", WS_PORT).start()
     log.info("WebSocket 服务已启动: 127.0.0.1:%d", WS_PORT)
 
-    # 启动 TCP 服务（接收 nginx 转发的回调）
-    tcp_server = await asyncio.start_server(handle_tcp, "127.0.0.1", RELAY_TCP_PORT)
-    log.info("TCP 中继服务已启动: 127.0.0.1:%d", RELAY_TCP_PORT)
+    # HTTP 服务（接收 nginx 转发的回调）监听 :9001
+    http_app = web.Application()
+    http_app.router.add_route("*", "/{path_info:.*}", handle_callback)
+    http_runner = web.AppRunner(http_app)
+    await http_runner.setup()
+    await web.TCPSite(http_runner, "127.0.0.1", RELAY_HTTP_PORT).start()
+    log.info("HTTP 中继服务已启动: 127.0.0.1:%d", RELAY_HTTP_PORT)
     log.info("等待弹幕库控制连接...")
 
-    async with tcp_server:
-        await tcp_server.serve_forever()
+    # 永久运行
+    await asyncio.Event().wait()
 
 
 if __name__ == "__main__":

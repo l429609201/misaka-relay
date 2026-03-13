@@ -1,0 +1,18 @@
+services:
+  misaka-relay:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: misaka-relay:latest
+    container_name: misaka-relay
+    restart: unless-stopped
+    ports:
+      - "52000:80"
+    environment:
+      # 必填：与弹幕库 Webhook API Key 保持一致
+      - WEBHOOK_KEY=your_webhook_api_key_here
+      # 反向隧道本地监听端口（弹幕库客户端 -R 参数中的远端端口）
+      - TUNNEL_PORT=9001
+      # 时区设置
+      - TZ=Asia/Shanghai
+

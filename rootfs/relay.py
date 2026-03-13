@@ -97,12 +97,22 @@ async def handle_data(request: web.Request) -> web.WebSocketResponse:
         await ws.close()
         return ws
 
+<<<<<<< HEAD
     close_event = asyncio.Event()
     fut.set_result((ws, close_event))
     log.debug("数据连接就绪: %s", conn_id[:8])
 
     # 等待 handle_callback 用完后发出关闭信号，不在此处 receive()（避免并发冲突）
     await close_event.wait()
+=======
+    fut.set_result(ws)
+    log.debug("数据连接就绪: %s", conn_id[:8])
+
+    # 保持连接直到 handle_callback 关闭
+    async for msg in ws:
+        if msg.type == WSMsgType.ERROR:
+            break
+>>>>>>> a951cc81645e0b7a15a6108ad9b69e4b8ea958f1
 
     return ws
 
@@ -140,7 +150,10 @@ async def handle_callback(request: web.Request) -> web.Response:
 
     log.info("[%s] 回调 %s %s", conn_id[:8], request.method, request.path_qs)
 
+<<<<<<< HEAD
     close_event: Optional[asyncio.Event] = None
+=======
+>>>>>>> a951cc81645e0b7a15a6108ad9b69e4b8ea958f1
     try:
         await _ctrl_ws.send_json(req_info)
         log.info("[%s] 已通知弹幕库", conn_id[:8])
@@ -152,9 +165,13 @@ async def handle_callback(request: web.Request) -> web.Response:
             log.warning("[%s] 等待数据连接超时，返回 504", conn_id[:8])
             return web.Response(status=504, text="Tunnel timeout")
 
+<<<<<<< HEAD
         data_ws, close_event = data_ws  # fut 结果是 (ws, close_event) 元组
 
         # 从数据 WS 接收弹幕库的 HTTP 响应
+=======
+        # 从数据 WS 接收弹幕库的 HTTP 响应（JSON TEXT 格式）
+>>>>>>> a951cc81645e0b7a15a6108ad9b69e4b8ea958f1
         try:
             msg = await asyncio.wait_for(data_ws.receive(), timeout=30.0)
         except asyncio.TimeoutError:
@@ -183,11 +200,17 @@ async def handle_callback(request: web.Request) -> web.Response:
         return web.Response(status=502, text="Tunnel error")
     finally:
         _pending_data.pop(conn_id, None)
+<<<<<<< HEAD
         if close_event is not None:
             close_event.set()
         if not fut.cancelled() and fut.done() and isinstance(fut.result(), tuple):
             try:
                 await fut.result()[0].close()
+=======
+        if not fut.cancelled() and fut.done():
+            try:
+                await fut.result().close()
+>>>>>>> a951cc81645e0b7a15a6108ad9b69e4b8ea958f1
             except Exception:
                 pass
 

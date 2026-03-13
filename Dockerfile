@@ -10,9 +10,9 @@ ENV TUNNEL_PORT=9001
 RUN apk add --no-cache tzdata nginx curl tar gettext && \
     # 下载 wstunnel 二进制
     ARCH=$(case "${TARGETARCH}" in \
-        amd64) echo "x64" ;; \
+        amd64) echo "amd64" ;; \
         arm64) echo "arm64" ;; \
-        *) echo "x64" ;; \
+        *) echo "amd64" ;; \
     esac) && \
     curl -fsSL "https://github.com/erebe/wstunnel/releases/download/v${WSTUNNEL_VERSION}/wstunnel_${WSTUNNEL_VERSION}_linux_${ARCH}.tar.gz" \
         -o /tmp/wstunnel.tar.gz && \

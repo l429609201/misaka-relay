@@ -3,10 +3,13 @@ server {
     server_name _;
 
     # ============================================================
-    # wstunnel WebSocket 隧道端点
-    # 客户端连接: wstunnel client --http-upgrade-path-prefix "wstunnel/YOUR_KEY" ws://vps:80
+    # misaka-relay WebSocket 隧道端点
+    # 控制连接: ws://VPS/ws/ctrl/{key}
+    # 数据连接: ws://VPS/ws/data/{key}/{conn_id}
+    # access_log off — 防止认证 key 被记录到 nginx 日志
     # ============================================================
-    location /wstunnel/ {
+    location /ws/ {
+        limit_req zone=ws_limit burst=10 nodelay;
         proxy_pass http://127.0.0.1:8443;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
@@ -15,6 +18,7 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
         proxy_read_timeout 86400s;
         proxy_send_timeout 86400s;
+        access_log off;
     }
 
     # ============================================================
@@ -40,27 +44,25 @@ server {
     }
 
     # ============================================================
-    # 企业微信 API 反向代理（wxchat 功能）
+    # 通用出网代理路由：/out/{目标host}/{路径}
+    # 用于将弹幕库的 API 请求通过 VPS 出网（企业微信、Telegram 等）
+    # 认证：Header X-Relay-Key 必须匹配 WEBHOOK_KEY
+    # access_log off — 防止 key 和 token 泄露到日志
     # ============================================================
-    location /cgi-bin/gettoken {
-        proxy_pass https://qyapi.weixin.qq.com;
+    location ~ ^/out/([^/]+)(/.*)$ {
+        if ($http_x_relay_key != "${WEBHOOK_KEY}") {
+            return 403;
+        }
+        resolver 8.8.8.8 1.1.1.1 valid=30s;
+        set $target_host $1;
+        set $target_path $2;
+        proxy_pass https://$target_host$target_path$is_args$args;
         proxy_ssl_server_name on;
-    }
-    location /cgi-bin/message/send {
-        proxy_pass https://qyapi.weixin.qq.com;
-        proxy_ssl_server_name on;
-    }
-    location /cgi-bin/menu/create {
-        proxy_pass https://qyapi.weixin.qq.com;
-        proxy_ssl_server_name on;
-    }
-    location /cgi-bin/media/upload {
-        proxy_pass https://qyapi.weixin.qq.com;
-        proxy_ssl_server_name on;
-    }
-    location /cgi-bin/media/get {
-        proxy_pass https://qyapi.weixin.qq.com;
-        proxy_ssl_server_name on;
+        proxy_set_header Host $target_host;
+        proxy_set_header X-Real-IP "";
+        proxy_set_header X-Forwarded-For "";
+        proxy_set_header X-Relay-Key "";
+        access_log off;
     }
 
     # ============================================================

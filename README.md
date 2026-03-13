@@ -37,10 +37,7 @@ nano docker-compose.yml
 ```yaml
 services:
   misaka-relay:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: misaka-relay:latest
+    image: l429609201/misaka-relay:latest
     container_name: misaka-relay
     restart: unless-stopped
     ports:
@@ -80,7 +77,7 @@ docker run -d \
   -e WEBHOOK_KEY=your_webhook_api_key_here \
   -e TUNNEL_PORT=9001 \
   -e TZ=Asia/Shanghai \
-  misaka-relay:latest
+  l429609201/misaka-relay:latest
 ```
 
 ---

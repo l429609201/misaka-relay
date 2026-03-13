@@ -21,20 +21,7 @@
 
 ### 方式一：Docker Compose（推荐）
 
-```bash
-# 1. 上传项目文件到 VPS
-scp -r . user@your-vps:/opt/misaka-relay/
-
-# 2. 进入项目目录
-cd /opt/misaka-relay
-
-# 3. 修改 docker-compose.yml 配置
-nano docker-compose.yml
-```
-
-**docker-compose.yml 配置说明：**
-
-```yaml
+```compose
 services:
   misaka-relay:
     image: l429609201/misaka-relay:latest
@@ -49,27 +36,10 @@ services:
       - TZ=Asia/Shanghai
 ```
 
-**启动服务：**
-
-```bash
-# 构建并启动容器
-docker compose up -d --build
-
-# 查看运行状态
-docker compose ps
-
-# 查看日志
-docker compose logs -f
-```
 
 ### 方式二：Docker Run
 
 ```bash
-# 构建镜像
-docker build -t misaka-relay:latest .
-```
-# 运行容器
-```
 docker run -d \
   --name misaka-relay \
   --restart unless-stopped \

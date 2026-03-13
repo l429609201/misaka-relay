@@ -27,10 +27,9 @@ if ! kill -0 $RELAY_PID 2>/dev/null; then
 fi
 echo "[INFO] relay.py 已就绪 (PID: $RELAY_PID)"
 
-# 用 envsubst 替换 nginx 配置中的环境变量
-export TUNNEL_PORT="${TUNNEL_PORT:-9001}"
+# 用 envsubst 替换 nginx 配置中的 WEBHOOK_KEY
 if [ -f /etc/nginx/http.d/default.conf.template ]; then
-    envsubst '${TUNNEL_PORT} ${WEBHOOK_KEY}' < /etc/nginx/http.d/default.conf.template > /etc/nginx/http.d/default.conf
+    envsubst '${WEBHOOK_KEY}' < /etc/nginx/http.d/default.conf.template > /etc/nginx/http.d/default.conf
 fi
 
 # 启动 nginx（前台）

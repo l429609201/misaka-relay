@@ -66,6 +66,26 @@ server {
     }
 
     # ============================================================
+    # 企业微信 API 简单反代：/cgi-bin/* → qyapi.weixin.qq.com
+    # 弹幕库「API 反向代理地址」直接填 http://VPS:端口（无需 /out 后缀）
+    # 鉴权：Header X-Relay-Key 必须匹配 WEBHOOK_KEY（与 /out 路由一致）
+    # access_log off — 防止 key 和 token 泄露到日志
+    # ============================================================
+    location /cgi-bin/ {
+        if ($http_x_relay_key != "${WEBHOOK_KEY}") {
+            return 403;
+        }
+        resolver 8.8.8.8 1.1.1.1 valid=30s;
+        proxy_pass https://qyapi.weixin.qq.com;
+        proxy_ssl_server_name on;
+        proxy_set_header Host qyapi.weixin.qq.com;
+        proxy_set_header X-Real-IP "";
+        proxy_set_header X-Forwarded-For "";
+        proxy_set_header X-Relay-Key "";
+        access_log off;
+    }
+
+    # ============================================================
     # 状态页
     # ============================================================
     location / {
